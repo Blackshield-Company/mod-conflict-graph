@@ -100,3 +100,17 @@ class RoundThreeTests(unittest.TestCase):
                 self.assertTrue(any(f['kind'] == 'external-master-override'
                                     and f['mods'] == ['B']
                                     for f in result['findings']))
+
+    def test_sibling_plugin_cannot_use_original_name_of_renamed_plugin(self):
+        a = self.package('A', {
+            'Original.esp': make_plugin(records=[{'type': 'GLOB', 'id': 0x800, 'edid': 'Target'}]),
+            'Sibling.esp': make_plugin(masters=['Original.esp'], records=[
+                {'type': 'QUST', 'id': 0x1000801, 'scripts': ['Other'],
+                 'props': [('Other', 'External', 0x800)]}]),
+            'fomod/ModuleConfig.xml': '<config><requiredInstallFiles><file source="Original.esp" destination="Renamed.esp"/></requiredInstallFiles></config>',
+        })
+        analyze([a])
+        sibling = next(p for p in a['plugins'] if p['file_name'] == 'Sibling.esp')
+        links = sibling.get('script_property_links', [])
+        self.assertFalse(any(l.get('target_editor_id') for l in links))
+

@@ -204,13 +204,14 @@ def analyze(mods):
             if direction not in dependency_edges:
                 dependency_edges.append(direction)
 
-    def targets(name, context=None):
+    def targets(name, context=None, source=None):
         matches = list(plugins.get(name.casefold(), []))
         # Source filenames remain valid for references within their own package,
         # but cannot satisfy another package's installed-plugin dependencies.
         if context is not None:
             for plugin in context['plugins']:
                 if (plugin['file_name'].casefold() == name.casefold()
+                        and (source is None or plugin is source)
                         and not any(owner is context and target is plugin
                                     for owner, target in matches)):
                     matches.append((context, plugin))
@@ -260,7 +261,7 @@ def analyze(mods):
                 references = list(r['script_props'])
                 references += [{'target_plugin': ref['plugin'], 'local_id': ref['local_id']} for ref in r['forced_refs'] + ([r['base']] if r['base'] else [])]
                 for ref in references:
-                    for owner, target in targets(ref['target_plugin'], mod):
+                    for owner, target in targets(ref['target_plugin'], mod, p):
                         item = '%s:%06X' % (ref['target_plugin'], ref['local_id'])
                         if owner is not mod:
                             add('record-reference', 'dependency', [mod, owner], 'FormID reference to analysed plugin', [item])
