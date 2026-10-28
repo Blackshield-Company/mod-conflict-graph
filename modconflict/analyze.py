@@ -171,9 +171,21 @@ def analyze(mods):
     mods = sorted(mods, key=lambda m: m['name'].casefold())
     findings = Findings()
     plugins = defaultdict(list)
+    installed_names = {}
     for mod in mods:
+        installed = _installed(mod)
         for p in mod['plugins']:
-            plugins[p['file_name'].casefold()].append((mod, p))
+            original = p['file_name']
+            names = sorted({destination.rsplit('/', 1)[-1]
+                            for destination, files in installed.items()
+                            if destination.endswith(('.esp', '.esm', '.esl'))
+                            and any(f['path'].rsplit('/', 1)[-1].casefold() == original.casefold()
+                                    for f in files)})
+            names = [original if n.casefold() == original.casefold() else n for n in names]
+            installed_names[id(p)] = names or [original]
+            for name in sorted(set(names + [original]), key=str.casefold):
+                if not any(owner is mod and target is p for owner, target in plugins[name.casefold()]):
+                    plugins[name.casefold()].append((mod, p))
     edges = []
     dependency_edges = []
     documented_orders = []
@@ -370,7 +382,7 @@ def analyze(mods):
         if shared_forced:
             add('alias-forced-ref', 'probable', owners, 'Quests force the same external reference', ['%s:%06X' % k for k in shared_forced])
         for author, other in ((a, b), (b, a)):
-            aliases = {other['name'].casefold()} | {p['file_name'].casefold() for p in other['plugins']}
+            aliases = {other['name'].casefold()} | {name for name, owners in plugins.items() if any(owner is other for owner, _ in owners)}
             claim = author['docs']
             def names(field):
                 return {s.casefold() for s in claim[field]}
@@ -391,26 +403,42 @@ def analyze(mods):
                 add('documented-interaction', 'info', owners, 'Documented soft integration', [author['name'] + ' mentions ' + other['name']], label='inferred', source='documentation')
     # Order actual plugins, including multiple plugins within the same mod.
     # Mod-level dependencies alone can falsely imply a cycle when plugins interleave.
-    canonical = {name: owners[0][1]['file_name'] for name, owners in plugins.items()}
-    plugin_nodes, plugin_edges = set(canonical.values()), []
+    canonical = {name: installed_names[id(owners[0][1])][0] for name, owners in plugins.items()}
+    plugin_nodes = {name for names in installed_names.values() for name in names}
+    plugin_edges = []
     for mod in mods:
         for plugin in mod['plugins']:
             for master in plugin['masters']:
                 target = canonical.get(master.casefold(), master)
                 plugin_nodes.add(target)
-                requirement = {'from': canonical[plugin['file_name'].casefold()], 'to': target, 'kind': 'master'}
-                if requirement not in plugin_edges:
-                    plugin_edges.append(requirement)
-    _master_order, cycles = _topology(plugin_nodes, plugin_edges)
+                for name in installed_names[id(plugin)]:
+                    requirement = {'from': name, 'to': target, 'kind': 'master'}
+                    if requirement not in plugin_edges:
+                        plugin_edges.append(requirement)
+    master_order, master_cycles = _topology(plugin_nodes, plugin_edges)
     for author, other in documented_orders:
         for a_plugin in author['plugins']:
             for b_plugin in other['plugins']:
-                plugin_edges.append({'from': canonical[a_plugin['file_name'].casefold()],
-                                     'to': canonical[b_plugin['file_name'].casefold()],
-                                     'kind': 'documented', 'label': 'inferred'})
-    order, _ordering_cycles = _topology(plugin_nodes, plugin_edges)
-    mod_order, _mod_cycles = _topology([m['name'] for m in mods], edges)
-    for cycle in cycles:
+                for a_name in installed_names[id(a_plugin)]:
+                    for b_name in installed_names[id(b_plugin)]:
+                        plugin_edges.append({'from': a_name, 'to': b_name,
+                                             'kind': 'documented', 'label': 'inferred'})
+    order, cycles = _topology(plugin_nodes, plugin_edges)
+    conflicting = [e for e in plugin_edges if e['kind'] == 'documented'
+                   and any(e['from'] in cycle and e['to'] in cycle for cycle in cycles)]
+    if conflicting:
+        order = master_order
+        for constraint in conflicting:
+            owners = {mod['name'] for name in (constraint['from'], constraint['to'])
+                      for mod, _plugin in targets(name)}
+            findings.add('order-conflict', 'warning', owners,
+                         'Documented ordering constraints form a cycle',
+                         [constraint['from'] + ' after ' + constraint['to']],
+                         label='inferred', source='documentation',
+                         hint='Suggested order falls back to hard master requirements')
+    hard_edges = [e for e in edges if e['kind'] != 'documented']
+    mod_order, _mod_cycles = _topology([m['name'] for m in mods], hard_edges if conflicting else edges)
+    for cycle in master_cycles:
         cycle_mods = {mod['name'] for name in cycle for mod, _plugin in targets(name)}
         findings.add('master-cycle', 'collision', cycle_mods, 'Cyclic plugin load requirements', cycle,
                      hint='No valid order exists for this cycle')
