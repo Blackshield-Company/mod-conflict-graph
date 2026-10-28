@@ -183,7 +183,7 @@ def analyze(mods):
                                     for f in files)})
             names = [original if n.casefold() == original.casefold() else n for n in names]
             installed_names[id(p)] = names or [original]
-            for name in sorted(set(names + [original]), key=str.casefold):
+            for name in installed_names[id(p)]:
                 if not any(owner is mod and target is p for owner, target in plugins[name.casefold()]):
                     plugins[name.casefold()].append((mod, p))
     edges = []
@@ -204,8 +204,17 @@ def analyze(mods):
             if direction not in dependency_edges:
                 dependency_edges.append(direction)
 
-    def targets(name):
-        return plugins.get(name.casefold(), [])
+    def targets(name, context=None):
+        matches = list(plugins.get(name.casefold(), []))
+        # Source filenames remain valid for references within their own package,
+        # but cannot satisfy another package's installed-plugin dependencies.
+        if context is not None:
+            for plugin in context['plugins']:
+                if (plugin['file_name'].casefold() == name.casefold()
+                        and not any(owner is context and target is plugin
+                                    for owner, target in matches)):
+                    matches.append((context, plugin))
+        return matches
 
     def target_records(plugin, local):
         return [r for r in plugin['records'] if not r['is_override'] and
@@ -251,7 +260,7 @@ def analyze(mods):
                 references = list(r['script_props'])
                 references += [{'target_plugin': ref['plugin'], 'local_id': ref['local_id']} for ref in r['forced_refs'] + ([r['base']] if r['base'] else [])]
                 for ref in references:
-                    for owner, target in targets(ref['target_plugin']):
+                    for owner, target in targets(ref['target_plugin'], mod):
                         item = '%s:%06X' % (ref['target_plugin'], ref['local_id'])
                         if owner is not mod:
                             add('record-reference', 'dependency', [mod, owner], 'FormID reference to analysed plugin', [item])
@@ -264,7 +273,7 @@ def analyze(mods):
             # Cross references above mutate the shared property-link dictionaries.
         for script in mod['source_facts']:
             for call in script['form_calls']:
-                owners = targets(call['plugin'])
+                owners = targets(call['plugin'], mod)
                 item = '%s:%06X' % (call['plugin'], call['local_id'])
                 if not owners:
                     add('external-soft-reference', 'info', [mod], 'Source reference outside analysed set', [item], label='inferred', source=script['name'])

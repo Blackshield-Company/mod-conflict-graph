@@ -62,3 +62,41 @@ class RoundThreeTests(unittest.TestCase):
         clean = analyze([a, b, c])
         self.assertFalse(clean['load_order']['cycles'])
         self.assertFalse(any(f['kind'] == 'order-conflict' for f in clean['findings']))
+
+    def test_original_name_is_private_to_renamed_plugins_package(self):
+        for target, missing in [(0x800, False), (0x999, True)]:
+            with self.subTest(target=target):
+                a = self.package('A', {
+                    'Original.esp': make_plugin(records=[
+                        {'type': 'GLOB', 'id': 0x800, 'edid': 'Target'},
+                        {'type': 'QUST', 'id': 0x801, 'scripts': ['Main'],
+                         'props': [('Main', 'Self', target)]}]),
+                    'fomod/ModuleConfig.xml': '<config><requiredInstallFiles><file source="Original.esp" destination="Renamed.esp"/></requiredInstallFiles></config>',
+                })
+                b = self.package('B', {'B.esp': make_plugin(
+                    masters=['ORIGINAL.ESP'], records=[
+                        ('GLOB', 0x800, 'ExternalOverride', []),
+                        {'type': 'QUST', 'id': 0x1000801, 'scripts': ['Other'],
+                         'props': [('Other', 'External', 0x800)]}])})
+                result = analyze([a, b])
+                external = [f for f in result['findings']
+                            if f['kind'] == 'external-master']
+                self.assertEqual(len(external), 1)
+                self.assertEqual(external[0]['mods'], ['B'])
+                self.assertIn('ORIGINAL.ESP (third-party)', external[0]['detail'])
+                self.assertFalse(result['dependency_edges'])
+                self.assertEqual(result['load_order']['plugin_edges'], [
+                    {'from': 'B.esp', 'to': 'ORIGINAL.ESP', 'kind': 'master'}])
+                dangling = [f for f in result['findings']
+                            if f['kind'] == 'dangling-reference']
+                self.assertEqual(bool(dangling), missing)
+                if missing:
+                    self.assertEqual(dangling[0]['mods'], ['A'])
+                else:
+                    self.assertEqual(a['plugins'][0]['script_property_links'][0]
+                                     ['target_editor_id'], 'Target')
+                self.assertEqual(b['plugins'][0]['script_property_links'][0]
+                                 ['target_editor_id'], 'ExternalOverride')
+                self.assertTrue(any(f['kind'] == 'external-master-override'
+                                    and f['mods'] == ['B']
+                                    for f in result['findings']))
