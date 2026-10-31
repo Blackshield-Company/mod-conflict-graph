@@ -147,7 +147,7 @@ def read_headers(members):
     headers, problems = [], []
     for path, data in sorted(_plugin_members(members)):
         try:
-            headers.append((path, parse_header(data, PurePosixPath(path).name)))
+            headers.append((path, parse_header(data, PurePosixPath(path).name, strict=True)))
         except PluginError as exc:
             problems.append(finding('masters', 'blocker', 'unreadable-plugin', path, str(exc)))
     return headers, problems
@@ -155,45 +155,53 @@ def read_headers(members):
 
 # Masters -------------------------------------------------------------------
 
+def _fomod_installed(root, config_path, members):
+    """Plugin names a ModuleConfig.xml installs from sources present in its own package."""
+    prefix = config_path[:-len('fomod/moduleconfig.xml')].casefold()
+    paths = sorted({fomod.normalize(p[len(prefix):]) for p, _d in members if p.casefold().startswith(prefix)})
+    names = set()
+    for item in fomod._files(root):
+        for src, dst in fomod._expand(item, paths):
+            names.update(PurePosixPath(x).name for x in (src, dst) if x.endswith(PLUGIN_EXTS))
+    return names
+
+
 def _fomod_declarations(members):
-    """Plugin names named by FOMOD dependencies/info, and FOMOD-installed plugin names."""
-    declared, installed, problems = {}, set(), []
-    for path, data in _all(members):
-        lower = path.casefold()
-        if lower.endswith('fomod/moduleconfig.xml'):
+    """FOMOD-declared plugin names, FOMOD-installed plugin names, and info.xml texts."""
+    declared, installed, texts, problems = {}, set(), [], []
+    for group in ('target', 'release'):
+        for path, data in members[group]:
+            lower = path.casefold()
+            if not lower.endswith(('fomod/moduleconfig.xml', 'fomod/info.xml')):
+                continue
             try:
                 root = fomod._xml(data)
             except ET.ParseError as exc:
                 problems.append(finding('masters', 'warning', 'unparsed-fomod', path, str(exc)))
                 continue
-            for node in root.iter():
-                if node.tag == 'fileDependency' and node.get('file'):
-                    name = PurePosixPath(node.get('file').replace('\\', '/')).name
+            if lower.endswith('fomod/moduleconfig.xml'):
+                for node in root.iter():
+                    if node.tag == 'fileDependency' and node.get('file'):
+                        name = PurePosixPath(node.get('file').replace('\\', '/')).name
+                        declared.setdefault(name.casefold(), path)
+                installed |= _fomod_installed(root, path, members[group])
+            else:
+                text = ' '.join(t for t in root.itertext())
+                texts.append((path, text))
+                for name in docs.plugin_names(text):
                     declared.setdefault(name.casefold(), path)
-                if node.tag in ('file', 'folder'):
-                    for attr in ('source', 'destination'):
-                        value = (node.get(attr) or '').replace('\\', '/')
-                        if value.casefold().endswith(PLUGIN_EXTS):
-                            installed.add(PurePosixPath(value).name.casefold())
-        elif lower.endswith('fomod/info.xml'):
-            try:
-                root = fomod._xml(data)
-            except ET.ParseError as exc:
-                problems.append(finding('masters', 'warning', 'unparsed-fomod', path, str(exc)))
-                continue
-            text = ' '.join(t for t in root.itertext())
-            for name in docs.plugin_names(text):
-                declared.setdefault(name.casefold(), path)
-    return declared, installed, problems
+    return declared, installed, texts, problems
 
 
-def _readme_declarations(members):
-    declared = {}
-    for path, data in _all(members):
-        if '/' not in path and README.match(path):
-            for name in docs.plugin_names(data.decode('utf-8-sig', 'replace')):
-                declared.setdefault(name.casefold(), path)
-    return declared
+def _readme_texts(members):
+    return [(path, data.decode('utf-8-sig', 'replace')) for path, data in _all(members)
+            if '/' not in path and README.match(path)]
+
+
+def _mentioned(name, texts):
+    """First doc path whose text names the whole file name; tolerates spaces plugin_names() drops."""
+    pattern = re.compile(r'(?<![\w-])%s(?![\w-])' % re.escape(name), re.I)
+    return next((path for path, text in texts if pattern.search(text)), None)
 
 
 def _requirements_file(path):
@@ -208,7 +216,8 @@ def _requirements_file(path):
 def check_masters(target, members, headers, config):
     """Flag masters that no FOMOD, README, or configured requirement declares."""
     results = []
-    fomod_names, fomod_installed, problems = _fomod_declarations(members)
+    fomod_names, fomod_installed, info_texts, problems = _fomod_declarations(members)
+    readme_texts = _readme_texts(members)
     results.extend(problems)
     sources = {}
     for name in config['implicit']:
@@ -224,8 +233,9 @@ def check_masters(target, members, headers, config):
             results.append(finding('masters', 'blocker', 'requirements-file', config['requirements_file'], str(exc)))
     for name, path in fomod_names.items():
         sources.setdefault(name, path)
-    for name, path in _readme_declarations(members).items():
-        sources.setdefault(name, path)
+    for path, text in readme_texts:
+        for name in docs.plugin_names(text):
+            sources.setdefault(name.casefold(), path)
     own = {PurePosixPath(p).name.casefold() for p, _h in headers} | fomod_installed
     for path, header in headers:
         for warning in header.warnings:
@@ -234,9 +244,10 @@ def check_masters(target, members, headers, config):
             key = master.casefold()
             if key in own:
                 continue
-            if key in sources:
+            where = sources.get(key) or _mentioned(master, info_texts + readme_texts)
+            if where:
                 results.append(finding('masters', 'info', 'declared-master', master,
-                                       '%s requires %s; declared in %s' % (path, master, sources[key])))
+                                       '%s requires %s; declared in %s' % (path, master, where)))
             else:
                 results.append(finding('masters', 'blocker', 'undeclared-master', master,
                                        '%s requires %s, which is not declared in FOMOD, README, or modcheck.toml'

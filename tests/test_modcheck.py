@@ -3,6 +3,7 @@ import io
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -11,7 +12,7 @@ import unittest
 from helpers import make_plugin, make_zip
 from modconflict.cli import main
 from modconflict import modcheck
-from modconflict.plugin import parse_header, parse_plugin
+from modconflict.plugin import PluginError, parse_header, parse_plugin
 
 INFO = '<fomod><Name>Alpha</Name><Version>%s</Version></fomod>'
 CONFIG = '''<config><moduleName>Alpha</moduleName>
@@ -120,6 +121,49 @@ class ModcheckTests(unittest.TestCase):
     def test_unreadable_plugin_blocks(self):
         self.make(files={'Broken.esp': b'not a plugin'})
         self.assertIn('unreadable-plugin', self.kinds('blocker'))
+
+    def test_corrupt_tes4_header_blocks(self):
+        # A MAST subrecord whose size overruns the header: masters cannot be trusted.
+        good = make_plugin(masters=['Skyrim.esm'])
+        head = good[24:] + b'MAST' + struct.pack('<H', 50) + b'Missing'
+        corrupt = b'TES4' + struct.pack('<III', len(head), 0, 0) + bytes(8) + head
+        with self.assertRaises(PluginError):
+            parse_header(corrupt, 'Alpha.esp', strict=True)
+        self.assertTrue(parse_header(corrupt, 'Alpha.esp').warnings)
+        self.make(files={'Alpha.esp': corrupt})
+        code, text = self.check()
+        self.assertEqual(code, 1, text)
+        self.assertIn('unreadable-plugin', text)
+
+    def test_fomod_install_requires_existing_source(self):
+        config = '''<config><moduleName>Alpha</moduleName><requiredInstallFiles>
+<file source="Alpha.esp"/><file source="Missing.esm" destination="Missing.esm"/>
+<file source="Variants/Alpha - Renamed.esp" destination="Alpha Renamed.esm"/>
+</requiredInstallFiles></config>'''
+        self.make(masters=['Skyrim.esm', 'Missing.esm'], files={'fomod/ModuleConfig.xml': config})
+        self.assertEqual(self.kinds('blocker'), ['undeclared-master'])
+        shutil.rmtree(self.mod)
+        self.make(masters=['Skyrim.esm', 'Alpha Renamed.esm'], files={
+            'fomod/ModuleConfig.xml': config,
+            'Variants/Alpha - Renamed.esp': make_plugin(masters=['Skyrim.esm'])})
+        self.assertEqual(self.kinds('blocker'), [])
+
+    def test_master_names_with_spaces_in_docs(self):
+        cases = [
+            ('README.md', 'Requires Some Master.esm and SKSE.', 0),
+            ('README.md', 'requires some master.ESM', 0),
+            ('fomod/info.xml', '<fomod><Version>1.0.0</Version><Description>Requires Some Master.esm</Description></fomod>', 0),
+            ('README.md', 'Requires Master.esm only.', 1),
+            ('README.md', 'Requires Awesome Master.esm.', 1),
+            ('README.md', 'Requires Some Master.esm2 tools.', 1),
+        ]
+        for name, text, expected in cases:
+            with self.subTest(text):
+                shutil.rmtree(self.mod, ignore_errors=True)
+                self.make(masters=['Skyrim.esm', 'Some Master.esm'], files={name: text})
+                code, report = self.check()
+                self.assertEqual(code, expected, report)
+                self.assertEqual('undeclared-master' in report, bool(expected))
 
     def test_release_package_plugins_take_precedence(self):
         self.make(masters=['Skyrim.esm'])

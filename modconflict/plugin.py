@@ -217,10 +217,11 @@ def _read_record_body(data, pos, size, flags):
     return body
 
 
-def parse_header(data, name):
+def parse_header(data, name, strict=False):
     """Parse only the TES4 header (flags, masters, author, description).
 
     Returns a Plugin without records; raise PluginError if it is not a plugin.
+    With strict, a corrupt header body (so an unreliable master list) also raises.
     """
     if len(data) < 24 or data[:4] != b"TES4":
         raise PluginError("%s: missing TES4 header" % name)
@@ -232,9 +233,18 @@ def parse_header(data, name):
     try:
         header_body = _read_record_body(data, 24, size, flags)
     except PluginError as exc:
+        if strict:
+            raise PluginError("%s: TES4 header: %s" % (name, exc))
         plugin.warnings.append(str(exc))
         header_body = b''
-    for stype, payload in _safe_subrecords(header_body, plugin):
+    if strict:
+        try:
+            fields = list(_subrecords(header_body))
+        except (PluginError, struct.error) as exc:
+            raise PluginError("%s: TES4 header: %s" % (name, exc))
+    else:
+        fields = _safe_subrecords(header_body, plugin)
+    for stype, payload in fields:
         if stype == b"HEDR" and len(payload) >= 4:
             plugin.version = round(struct.unpack_from("<f", payload)[0], 2)
         elif stype == b"MAST":
