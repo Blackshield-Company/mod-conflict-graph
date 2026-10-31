@@ -72,3 +72,14 @@ No Bethesda assets or plugin/script files are copied into the repository or outp
 Each release archive uses its own FOMOD configuration and file inventory; possible installed destinations are combined conservatively. Plugin name collisions use installed destination filenames, including unreadable plugins. Compressed records are limited to their declared size and a 64 MiB decompression cap; malformed or oversized bodies are skipped with parse gaps. Malformed XML encodings and pinned IDs also produce gaps.
 
 Documented load-after requests contribute inferred constraints to suggested ordering; master-cycle findings remain based on plugin master tables. Vanilla edit claims cover base/DLC masters and Creation Club names beginning with `cc` plus a three-letter studio code and `sse`. Overrides of other unanalysed masters receive inferred external-master override warnings.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+## Support
+
+Donations are optional. Nothing in this tool is gated on them.
+
+- GitHub Sponsors: https://github.com/sponsors/synthalorian
+- Ko-fi: https://ko-fi.com/synthalorian
