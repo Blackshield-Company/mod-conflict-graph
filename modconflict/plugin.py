@@ -47,6 +47,8 @@ class Plugin:
         self.masters = []
         self.records = []               # every non-TES4 record, in file order
         self.version = None             # HEDR version float
+        self.author = None              # TES4 CNAM
+        self.description = None         # TES4 SNAM
         self.warnings = []
 
     @property
@@ -215,8 +217,11 @@ def _read_record_body(data, pos, size, flags):
     return body
 
 
-def parse_plugin(data, name):
-    """Parse plugin bytes; raise PluginError if it is not a Skyrim SE plugin."""
+def parse_header(data, name):
+    """Parse only the TES4 header (flags, masters, author, description).
+
+    Returns a Plugin without records; raise PluginError if it is not a plugin.
+    """
     if len(data) < 24 or data[:4] != b"TES4":
         raise PluginError("%s: missing TES4 header" % name)
     plugin = Plugin(name)
@@ -234,9 +239,19 @@ def parse_plugin(data, name):
             plugin.version = round(struct.unpack_from("<f", payload)[0], 2)
         elif stype == b"MAST":
             plugin.masters.append(_zstring(payload))
+        elif stype == b"CNAM":
+            plugin.author = _zstring(payload)
+        elif stype == b"SNAM":
+            plugin.description = _zstring(payload)
         elif stype == b"HEDR":
             plugin.warnings.append("Short HEDR subrecord")
-    pos = 24 + size
+    return plugin
+
+
+def parse_plugin(data, name):
+    """Parse plugin bytes; raise PluginError if it is not a Skyrim SE plugin."""
+    plugin = parse_header(data, name)
+    pos = 24 + struct.unpack_from("<I", data, 4)[0]
     stack = []          # (end offset, group type, label) for enclosing GRUPs
     total = len(data)
     while pos < total:

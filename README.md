@@ -16,6 +16,16 @@ Place clones in `clones/<repo>/` and release zips in `releases/<repo>/*.zip`. An
 
 The optional `scripts/fetch-sources.sh --work /tmp/mcg-work --owner OWNER --repos "a b"` helper uses installed `git`, `gh`, `timeout`, and `nice` to fetch shallow clones and latest release zips, falling back to the newest prerelease. It performs sequential, time-limited downloads, never pushes, and prints the analysis command. The main tool does not invoke this helper or require these programs.
 
+## modcheck: pre-release checks
+
+`modcheck` is a subcommand that checks one mod before a release. It uses the same engine as a library:
+
+```sh
+bin/mod-conflict-graph modcheck path/to/MyMod --against ../OtherMod --out modcheck.md
+```
+
+It runs three checks. First, it reads the TES4 header masters of each shipped plugin and blocks on any master that is not declared in FOMOD `ModuleConfig.xml`/`info.xml`, the README, or `modcheck.toml`. Second, it reports record and load-order conflicts between the mod and other local mod directories. Third, it compares the FOMOD `info.xml` version, any version in the plugin description, the top CHANGELOG entry, and the git tag (git is queried read-only). The report is Markdown. modcheck exits 1 on blockers and 2 on errors. `modcheck.toml` sets declared masters, peers, thresholds, and ignore rules that must give a reason; reading it needs Python 3.11+ for `tomllib`. `action.yml` is a reusable composite GitHub Action that runs modcheck and writes the report to the job summary. See [docs/modcheck.md](docs/modcheck.md).
+
 ## Evidence and severity
 
 Every finding contains `verified` or `inferred` evidence entries with sources and details:

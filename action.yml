@@ -1,0 +1,96 @@
+name: 'mod-conflict-graph modcheck'
+description: 'Pre-release checks for a Skyrim SE mod: declared masters, conflicts with other mods, and version drift.'
+branding:
+  icon: 'check-square'
+  color: 'gray-dark'
+
+inputs:
+  path:
+    description: 'Mod directory to check (normally the checkout root).'
+    required: false
+    default: '.'
+  config:
+    description: 'Path to modcheck.toml. Defaults to PATH/modcheck.toml when present.'
+    required: false
+    default: ''
+  against:
+    description: 'Other local mod directories to check conflicts with, one per line.'
+    required: false
+    default: ''
+  release:
+    description: 'Built package for PATH: a folder of zips or an unpacked package.'
+    required: false
+    default: ''
+  tag:
+    description: 'Release tag to compare. Defaults to the pushed tag on tag events, else git tags at HEAD.'
+    required: false
+    default: ''
+  fail-on:
+    description: 'Fail the step at this level: blocker, warning, or never.'
+    required: false
+    default: 'blocker'
+  git:
+    description: 'Set to false to skip read-only git tag queries.'
+    required: false
+    default: 'true'
+  python:
+    description: 'Python 3.11+ interpreter used to run modcheck (tomllib is needed for modcheck.toml).'
+    required: false
+    default: 'python3'
+  report:
+    description: 'Where to write the Markdown report. Defaults to $RUNNER_TEMP/modcheck-report.md.'
+    required: false
+    default: ''
+
+outputs:
+  report:
+    description: 'Path to the Markdown report.'
+    value: ${{ steps.modcheck.outputs.report }}
+  exit-code:
+    description: '0 when passing, 1 when blocked, 2 on usage or input errors.'
+    value: ${{ steps.modcheck.outputs.exit-code }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: modcheck
+      shell: bash
+      env:
+        MODCHECK_PATH: ${{ inputs.path }}
+        MODCHECK_CONFIG: ${{ inputs.config }}
+        MODCHECK_AGAINST: ${{ inputs.against }}
+        MODCHECK_RELEASE: ${{ inputs.release }}
+        MODCHECK_TAG: ${{ inputs.tag }}
+        MODCHECK_FAIL_ON: ${{ inputs.fail-on }}
+        MODCHECK_GIT: ${{ inputs.git }}
+        MODCHECK_PYTHON: ${{ inputs.python }}
+        MODCHECK_REPORT: ${{ inputs.report }}
+        MODCHECK_REF_TYPE: ${{ github.ref_type }}
+        MODCHECK_REF_NAME: ${{ github.ref_name }}
+      # Inputs reach the script only through the environment, never by template expansion.
+      run: |
+        set -euo pipefail
+        args=("$MODCHECK_PATH" --fail-on "$MODCHECK_FAIL_ON")
+        [ -n "$MODCHECK_CONFIG" ] && args+=(--config "$MODCHECK_CONFIG")
+        [ -n "$MODCHECK_RELEASE" ] && args+=(--release "$MODCHECK_RELEASE")
+        tag="$MODCHECK_TAG"
+        if [ -z "$tag" ] && [ "$MODCHECK_REF_TYPE" = "tag" ]; then
+          tag="$MODCHECK_REF_NAME"
+        fi
+        [ -n "$tag" ] && args+=(--tag "$tag")
+        [ "$MODCHECK_GIT" = "false" ] && args+=(--no-git)
+        while IFS= read -r dir; do
+          dir="${dir%$'\r'}"
+          [ -n "${dir//[[:space:]]/}" ] && args+=(--against "$dir")
+        done <<< "$MODCHECK_AGAINST"
+        report="${MODCHECK_REPORT:-${RUNNER_TEMP:-/tmp}/modcheck-report.md}"
+        summary=()
+        [ -n "${GITHUB_STEP_SUMMARY:-}" ] && summary=(--summary "$GITHUB_STEP_SUMMARY")
+        set +e
+        "$MODCHECK_PYTHON" "$GITHUB_ACTION_PATH/bin/mod-conflict-graph" modcheck "${args[@]}" \
+          --out "$report" "${summary[@]}"
+        code=$?
+        set -e
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        exit "$code"

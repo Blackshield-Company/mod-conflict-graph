@@ -45,8 +45,13 @@ def group(data, group_type, label):
     return b'GRUP' + struct.pack('<IIi', len(data) + 24, label, group_type) + bytes(8) + data
 
 
-def make_plugin(name='Test.esp', esl=False, masters=(), records=(), esm=False, localized=False):
+def make_plugin(name='Test.esp', esl=False, masters=(), records=(), esm=False, localized=False,
+                author=None, description=None):
     head = sub('HEDR', struct.pack('<fII', 1.7, len(records), 0x800))
+    if author is not None:
+        head += sub('CNAM', author.encode() + b'\0')
+    if description is not None:
+        head += sub('SNAM', description.encode() + b'\0')
     head += b''.join(sub('MAST', m.encode() + b'\0') for m in masters)
     flags = (0x200 if esl else 0) | (1 if esm else 0) | (0x80 if localized else 0)
     out = b'TES4' + struct.pack('<III', len(head), flags, 0) + bytes(8) + head
