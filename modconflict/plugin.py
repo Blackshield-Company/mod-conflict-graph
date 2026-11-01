@@ -47,6 +47,8 @@ class Plugin:
         self.masters = []
         self.records = []               # every non-TES4 record, in file order
         self.version = None             # HEDR version float
+        self.author = None              # TES4 CNAM
+        self.description = None         # TES4 SNAM
         self.warnings = []
 
     @property
@@ -215,8 +217,12 @@ def _read_record_body(data, pos, size, flags):
     return body
 
 
-def parse_plugin(data, name):
-    """Parse plugin bytes; raise PluginError if it is not a Skyrim SE plugin."""
+def parse_header(data, name, strict=False):
+    """Parse only the TES4 header (flags, masters, author, description).
+
+    Returns a Plugin without records; raise PluginError if it is not a plugin.
+    With strict, a corrupt header body (so an unreliable master list) also raises.
+    """
     if len(data) < 24 or data[:4] != b"TES4":
         raise PluginError("%s: missing TES4 header" % name)
     plugin = Plugin(name)
@@ -227,16 +233,35 @@ def parse_plugin(data, name):
     try:
         header_body = _read_record_body(data, 24, size, flags)
     except PluginError as exc:
+        if strict:
+            raise PluginError("%s: TES4 header: %s" % (name, exc))
         plugin.warnings.append(str(exc))
         header_body = b''
-    for stype, payload in _safe_subrecords(header_body, plugin):
+    if strict:
+        try:
+            fields = list(_subrecords(header_body))
+        except (PluginError, struct.error) as exc:
+            raise PluginError("%s: TES4 header: %s" % (name, exc))
+    else:
+        fields = _safe_subrecords(header_body, plugin)
+    for stype, payload in fields:
         if stype == b"HEDR" and len(payload) >= 4:
             plugin.version = round(struct.unpack_from("<f", payload)[0], 2)
         elif stype == b"MAST":
             plugin.masters.append(_zstring(payload))
+        elif stype == b"CNAM":
+            plugin.author = _zstring(payload)
+        elif stype == b"SNAM":
+            plugin.description = _zstring(payload)
         elif stype == b"HEDR":
             plugin.warnings.append("Short HEDR subrecord")
-    pos = 24 + size
+    return plugin
+
+
+def parse_plugin(data, name):
+    """Parse plugin bytes; raise PluginError if it is not a Skyrim SE plugin."""
+    plugin = parse_header(data, name)
+    pos = 24 + struct.unpack_from("<I", data, 4)[0]
     stack = []          # (end offset, group type, label) for enclosing GRUPs
     total = len(data)
     while pos < total:

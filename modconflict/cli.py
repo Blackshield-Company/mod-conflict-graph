@@ -9,7 +9,9 @@ from .render import graph_data, write
 
 
 def parser():
-    p = argparse.ArgumentParser(description='Build an evidence-based Skyrim SE mod conflict graph.')
+    p = argparse.ArgumentParser(description='Build an evidence-based Skyrim SE mod conflict graph.',
+                                epilog='Subcommand: "modcheck [PATH] ..." runs pre-release checks for one mod; '
+                                       'see "modcheck --help".')
     p.add_argument('--clones', type=Path)
     p.add_argument('--releases', type=Path)
     p.add_argument('--mods', help='Comma-separated repository names')
@@ -24,6 +26,10 @@ def parser():
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ['modcheck']:
+        from .modcheck import main as modcheck_main
+        return modcheck_main(argv[1:])
     p = parser()
     args = p.parse_args(argv)
     if not args.clones and not args.releases:
